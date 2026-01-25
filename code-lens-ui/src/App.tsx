@@ -62,15 +62,24 @@ export default function App() {
   };
 
   // --- Handlers ---
-  const handleIndex = async () => {
+  
+  /**
+   * Updated handleIndex to accept a force parameter.
+   * If force is true, it tells the backend to bypass cache and wipe the collection.
+   */
+  const handleIndex = async (force: boolean = false) => {
     if (!repoUrl || status === 'indexing') return;
     
     const toastId = "ingest-progress";
     setStatus('indexing');
-    setMessages([]); 
-    toast.loading("Analyzing codebase architecture...", { id: toastId });
+    
+    // Clear messages for a fresh start if forcing a re-index
+    if (force) setMessages([]); 
+    
+    toast.loading(force ? "Force re-indexing codebase..." : "Analyzing codebase architecture...", { id: toastId });
 
     try {
+      // Pass the force flag to the API call
       await api.ingest(repoUrl, (update) => {
         if (update.status === 'ready' || update.summary) {
           const detectedBranch = update.summary?.branch || update.branch || "main";
@@ -102,7 +111,7 @@ export default function App() {
           return;
         }
         toast.loading(update.message, { id: toastId });
-      });
+      }, force); // Parameter added here
     } catch (err) {
       setStatus('idle');
       toast.error("Network error. Is the backend running?", { id: toastId });
@@ -139,7 +148,32 @@ export default function App() {
     setMessages([]);
   };
 
-  // --- Render ---
+  const handleDeleteIndex = async (url: string) => {
+    try {
+      await api.deleteIndex(url);
+      const newHistory = history.filter(item => item.url !== url);
+      setHistory(newHistory);
+      
+      if (repoUrl === url) {
+        setRepoUrl("");
+        setStatus('idle');
+        setMessages([]);
+      }
+      toast.success("Index wiped from storage");
+    } catch (err) {
+      toast.error("Failed to delete index");
+    }
+  };
+
+  const handleClearHistory = () => {
+    if (window.confirm("This will clear your local history. Actual indexes will remain on the server. Continue?")) {
+      setHistory([]);
+      setRepoUrl("");
+      setStatus('idle');
+      localStorage.removeItem("codelens_history");
+    }
+  };
+
   return (
     <div className="flex w-screen h-screen bg-[#131314] text-[#e3e3e3] overflow-hidden font-sans">
       
@@ -148,8 +182,10 @@ export default function App() {
         setRepoUrl={setRepoUrl}
         status={status}
         history={history}
-        onIndex={handleIndex}
+        onIndex={handleIndex} 
         onSelectSession={handleSelectSession}
+        onDeleteSession={handleDeleteIndex}
+        onClearHistory={handleClearHistory}
       />
 
       <main className="flex-1 flex flex-col min-w-0 bg-[#131314] relative">

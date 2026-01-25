@@ -46,6 +46,7 @@ brain = CodeLensBrain(api_key=api_key)
 
 class IngestRequest(BaseModel):
     repo_url: str
+    force: bool = False
 
 class QueryRequest(BaseModel):
     question: str
@@ -69,18 +70,27 @@ async def ingest_repository(request: IngestRequest):
                 return f"data: {json.dumps({'status': status, 'message': message, 'summary': summary})}\n\n"
 
             # 1. Persistence Check - FIX: UNPACK THE TUPLE
-            is_indexed, metadata = vector_store.check_if_indexed(request.repo_url)
+            if not request.force:
+                is_indexed, metadata = vector_store.check_if_indexed(request.repo_url)
             
-            if is_indexed:
-                # Retrieve the actual branch from metadata, default to main if not found
-                cached_branch = metadata.get("branch", "main") if metadata else "main"
-                
-                yield sse_format(
-                    "ready", 
-                    f"Cache hit: repository already indexed (branch: {cached_branch})", 
-                    {"cached": True, "branch": cached_branch}
-                )
-                return
+                if is_indexed:
+                    # Retrieve the actual branch from metadata, default to main if not found
+                    cached_branch = metadata.get("branch", "main") if metadata else "main"
+                    
+                    yield sse_format(
+                        "ready", 
+                        f"Cache hit: repository already indexed (branch: {cached_branch})", 
+                        {"cached": True, "branch": cached_branch}
+                    )
+                    return
+            else:
+                yield sse_format("reindexing", "Force re-index: Wiping old data and starting fresh")
+                logger.info(f"Force re-index requested for: {request.repo_url}")
+                try:
+                    repo_hash = vector_store._get_repo_hash(request.repo_url)
+                    vector_store.chroma_client.delete_collection(name=repo_hash)
+                except:
+                    pass # Fine if it didn't exist
 
             # 2. Ingestion/Cloning
             yield sse_format("cloning", "Cloning repository")
@@ -129,23 +139,57 @@ async def ingest_repository(request: IngestRequest):
             yield sse_format("error", f"Internal Server Error: {str(e)}")
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
-
 @app.post("/query")
 async def query_codebase(request: QueryRequest):
     logger.info(f"Query received for {request.repo_url}: {request.question[:50]}...")
     
     try:
+        # 1. Search Vector Store
+        # Returns chunks based on cosine similarity
         context = vector_store.search(request.repo_url, request.question)
         
         if not context:
             logger.warning(f"No relevant context found for query: {request.question}")
-            return StreamingResponse(iter(["data: No relevant code snippets found in the current index.\n\n"]), media_type="text/event-stream")
+            return StreamingResponse(
+                iter(["data: No relevant code snippets found. Try re-indexing if the code was recently changed.\n\n"]), 
+                media_type="text/event-stream"
+            )
         
         logger.info(f"Context retrieval successful: {len(context)} snippets retrieved")
+
+        # 2. Define a wrapper generator to ensure SSE format consistency
+        async def stream_wrapper():
+            try:
+                # The brain.generate_answer_stream yields chunks from Gemini
+                async for chunk in brain.generate_answer_stream(request.question, context):
+                    # We yield raw text here because your frontend api.ts 
+                    # specifically uses: rawChunk.replace(/^data:\s*/gm, "")
+                    yield chunk
+            except Exception as e:
+                logger.error(f"Streaming error in Brain: {str(e)}")
+                yield f"\n\n[Error during generation: {str(e)}]"
+
         return StreamingResponse(
-            brain.generate_answer_stream(request.question, context),
+            stream_wrapper(),
             media_type="text/event-stream"
         )
+
     except Exception as e:
         logger.error(f"Query processing failure: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal query processing error")
+        # Standard HTTP error if we haven't started streaming yet
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+@app.delete("/ingest")
+async def delete_index(request: IngestRequest):
+    try:
+        repo_hash = vector_store._get_repo_hash(request.repo_url)
+        vector_store.chroma_client.delete_collection(name=repo_hash)
+        logger.info(f"Deleted index for: {request.repo_url}")
+        return {"status": "success", "message": "Index deleted successfully"}
+    except ValueError:
+        # Collection already gone or never existed
+        return {"status": "success", "message": "Index already clear"}
+    except Exception as e:
+        logger.error(f"Failed to delete index: {str(e)}")
+        return {"status": "error", "message": str(e)}
