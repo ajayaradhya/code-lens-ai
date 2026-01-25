@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { 
   Zap, Github, Send, Loader2, Database, 
-  ExternalLink, History, CheckCircle2 
+  ExternalLink, History, CheckCircle2, AlertCircle 
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -14,15 +14,45 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 type AppStatus = 'idle' | 'indexing' | 'ready';
 
+interface RepoHistory {
+  url: string;
+  branch: string;
+}
+
 export default function App() {
   const [repoUrl, setRepoUrl] = useState("");
+  const [activeBranch, setActiveBranch] = useState("main");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<AppStatus>('idle');
-  const [history, setHistory] = useState<string[]>([]);
+  const [history, setHistory] = useState<RepoHistory[]>([]);
   const [messages, setMessages] = useState<{ role: 'user' | 'ai', content: string }[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 1. FIX: Load history and set the initial repo/branch correctly
+  useEffect(() => {
+    const saved = localStorage.getItem("codelens_history");
+    if (saved) {
+      try {
+        const parsedHistory: RepoHistory[] = JSON.parse(saved);
+        setHistory(parsedHistory);
+        if (parsedHistory.length > 0) {
+          // Auto-select the last used repo and its correct branch
+          setRepoUrl(parsedHistory[0].url);
+          setActiveBranch(parsedHistory[0].branch);
+        }
+      } catch (e) {
+        console.error("Failed to parse history", e);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (history.length > 0) {
+      localStorage.setItem("codelens_history", JSON.stringify(history));
+    }
+  }, [history]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -33,7 +63,7 @@ export default function App() {
   const getGithubLink = (path: string) => {
     const cleanPath = path.replace(/['`]/g, "").trim();
     const base = repoUrl.replace(/\/$/, '');
-    return `${base}/blob/master/${cleanPath}`;
+    return `${base}/blob/${activeBranch}/${cleanPath}`;
   };
 
   const handleIndex = async () => {
@@ -43,7 +73,7 @@ export default function App() {
     setStatus('indexing');
     setMessages([]); 
 
-    toast.loading("Initializing connection...", { id: toastId });
+    toast.loading("Waking up the local instance...", { id: toastId });
 
     try {
       await api.ingest(repoUrl, (update) => {
@@ -51,16 +81,21 @@ export default function App() {
         const isError = update.status === 'error';
 
         if (isFinished) {
+          const detectedBranch = update.summary?.branch || "main";
           setStatus('ready');
-          if (!history.includes(repoUrl)) setHistory(prev => [repoUrl, ...prev]);
+          setActiveBranch(detectedBranch);
+
+          setHistory(prev => {
+            const filtered = prev.filter(item => item.url !== repoUrl);
+            return [{ url: repoUrl, branch: detectedBranch }, ...filtered];
+          });
           
           toast.success("Codebase Indexed Successfully", { id: toastId });
           
-          // FIX: Delay the message slightly so it doesn't pop at the same time as the toast
           setTimeout(() => {
             setMessages([{ 
               role: 'ai', 
-              content: `Successfully indexed **${repoUrl.split('/').pop()}**. ${update.message || "Architecture analyzed."}` 
+              content: `Index complete for **${repoUrl.split('/').pop()}**. I've targeted the \`${detectedBranch}\` branch. Ready for deep diving.` 
             }]);
           }, 500);
           return;
@@ -68,7 +103,17 @@ export default function App() {
 
         if (isError) {
           setStatus('idle');
-          toast.error(update.message, { id: toastId });
+          // 2. FIX: Improved case-insensitive check for quota errors
+          const errorMsg = update.message.toUpperCase();
+          if (errorMsg.includes("429") || errorMsg.includes("QUOTA") || errorMsg.includes("EXHAUSTED")) {
+            toast.error("Gemini is exhausted.", { id: toastId });
+            setMessages([{
+                role: 'ai',
+                content: "### 🛑 Brain Freeze (Quota 429)\n\nI've been thinking too hard and Google's free tier has put me in timeout. \n\n**Give me about 20 seconds** to cool my circuits and then try indexing again. Even AI needs to blink occasionally."
+            }]);
+          } else {
+            toast.error(update.message, { id: toastId });
+          }
           return;
         }
 
@@ -76,7 +121,7 @@ export default function App() {
       });
     } catch (err: any) {
       setStatus('idle');
-      toast.error(err.message || "Connection failed", { id: toastId });
+      toast.error("Network hiccup.", { id: toastId });
     }
   };
 
@@ -89,15 +134,15 @@ export default function App() {
     setIsStreaming(true);
 
     try {
-      await api.query(targetQuery, (chunk) => {
+      await api.query(repoUrl, targetQuery, (chunk) => {
         setMessages(prev => {
           const last = prev[prev.length - 1];
           const rest = prev.slice(0, -1);
           return [...rest, { ...last, content: last.content + chunk }];
         });
       });
-    } catch (err) {
-      toast.error("Failed to fetch response");
+    } catch (err: any) {
+        toast.error("Thinking failed. Try a shorter question.");
     } finally {
       setIsStreaming(false);
     }
@@ -146,8 +191,6 @@ export default function App() {
 
   return (
     <div className="flex w-screen h-screen bg-[#131314] text-[#e3e3e3] overflow-hidden font-sans">
-      
-      {/* SIDEBAR */}
       <aside className="w-[320px] bg-[#1e1f20] flex flex-col p-6 border-r border-white/5 shrink-0">
         <div className="flex items-center gap-3 mb-10 px-1">
           <div className="w-8 h-8 flex items-center justify-center">
@@ -195,96 +238,93 @@ export default function App() {
             <History size={14} />
             <span className="text-[10px] font-bold uppercase tracking-widest">Recent Sessions</span>
           </div>
-          {history.map((url, i) => (
+          {history.map((item, i) => (
             <div 
               key={i} 
-              onClick={() => { setRepoUrl(url); setStatus('idle'); }}
+              onClick={() => { 
+                setRepoUrl(item.url); 
+                setActiveBranch(item.branch);
+                setStatus('idle'); 
+              }}
               className={`p-3 mb-2 rounded-xl border cursor-pointer transition-all text-xs truncate ${
-                repoUrl === url ? 'bg-[#8ab4f8]/10 border-[#8ab4f8]/20 text-[#8ab4f8]' : 'bg-white/5 border-transparent hover:border-white/10 text-[#c4c7c5]'
+                repoUrl === item.url ? 'bg-[#8ab4f8]/10 border-[#8ab4f8]/20 text-[#8ab4f8]' : 'bg-white/5 border-transparent hover:border-white/10 text-[#c4c7c5]'
               }`}
             >
-              <Github size={12} className="inline mr-2 opacity-50" />
-              {url.split('/').pop()}
+              <div className="flex items-center justify-between">
+                <span className="truncate flex-1">
+                  <Github size={12} className="inline mr-2 opacity-50" />
+                  {item.url.split('/').pop()}
+                </span>
+                <span className="text-[9px] opacity-40 ml-2 font-mono">{item.branch}</span>
+              </div>
             </div>
           ))}
         </div>
       </aside>
 
-      {/* CHAT AREA */}
       <main className="flex-1 flex flex-col min-w-0 bg-[#131314] relative">
         <div ref={scrollRef} className="flex-1 overflow-y-auto custom-scrollbar pb-44">
-          <div className="max-w-[850px] mx-auto px-8 py-20"> {/* Increased py-12 to py-20 for breathing room */}
-            
+          <div className="max-w-[850px] mx-auto px-8 py-20">
             {messages.length === 0 ? (
-              <div className="h-[70vh] flex flex-col items-center justify-center">
-                <h2 className="text-4xl font-light text-white mb-8 tracking-tight italic">How can I help you today?</h2>
-                
-                {status === 'ready' && (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 w-full max-w-2xl">
-                    {[
-                      { label: "Overview", icon: <Database size={16} />, prompt: "Give me a high-level overview of this project's architecture." },
-                      { label: "Entry Point", icon: <Zap size={16} />, prompt: "Where is the main entry point and how does the app initialize?" },
-                      { label: "Logic Flow", icon: <Github size={16} />, prompt: "Explain the core logic flow of the main data processing features." }
-                    ].map((q, i) => (
-                      <button
-                        key={i}
-                        onClick={() => submitQuery(q.prompt)}
-                        className="flex flex-col items-start p-5 rounded-2xl bg-[#1e1f20] border border-white/5 hover:border-[#8ab4f8]/40 hover:bg-[#252629] transition-all text-left group"
-                      >
-                        <div className="mb-4 p-2 rounded-lg bg-[#131314] text-[#8ab4f8] group-hover:text-white transition-colors">{q.icon}</div>
-                        <span className="text-sm font-medium text-[#c4c7c5] group-hover:text-white">{q.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              messages.map((m, i) => (
-                <div key={i} className="flex gap-6 mb-12 animate-in fade-in slide-in-from-bottom-3 duration-500 delay-150">
-                  <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold tracking-widest ${
-                    m.role === 'user' ? 'bg-[#3c4043] text-[#e3e3e3] border border-white/10' : 'bg-[#1e1f20] border border-[#8ab4f8]/20 shadow-[0_0_15px_rgba(138,180,248,0.1)]'
-                  }`}>
-                    {m.role === 'user' ? "YOU" : <img src="/code-lens-logo.svg" className="w-5 h-5 drop-shadow-[0_0_3px_#8ab4f8]" />}
-                  </div>
-                  
-                  <div className="flex-1 min-w-0 pt-1">
-                    <div className="prose prose-invert prose-gemini max-w-none">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
-                        {m.content}
-                      </ReactMarkdown>
-                      {isStreaming && i === messages.length - 1 && m.role === 'ai' && (
-                        <span className="inline-block w-2 h-4 bg-[#8ab4f8] ml-1 animate-pulse" />
-                      )}
-                    </div>
-                  </div>
+                <div className="h-[70vh] flex flex-col items-center justify-center">
+                    <h2 className="text-4xl font-light text-white mb-8 tracking-tight italic">How can I help you today?</h2>
+                    {status === 'ready' && (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 w-full max-w-2xl">
+                        {[
+                            { label: "Overview", icon: <Database size={16} />, prompt: "Give me a high-level overview of this project's architecture." },
+                            { label: "Entry Point", icon: <Zap size={16} />, prompt: "Where is the main entry point and how does the app initialize?" },
+                            { label: "Logic Flow", icon: <Github size={16} />, prompt: "Explain the core logic flow of the main data processing features." }
+                        ].map((q, i) => (
+                            <button
+                            key={i}
+                            onClick={() => submitQuery(q.prompt)}
+                            className="flex flex-col items-start p-5 rounded-2xl bg-[#1e1f20] border border-white/5 hover:border-[#8ab4f8]/40 hover:bg-[#252629] transition-all text-left group"
+                            >
+                            <div className="mb-4 p-2 rounded-lg bg-[#131314] text-[#8ab4f8] group-hover:text-white transition-colors">{q.icon}</div>
+                            <span className="text-sm font-medium text-[#c4c7c5] group-hover:text-white">{q.label}</span>
+                            </button>
+                        ))}
+                        </div>
+                    )}
                 </div>
-              ))
+            ) : (
+                messages.map((m, i) => (
+                    <div key={i} className="flex gap-6 mb-12 animate-in fade-in slide-in-from-bottom-3 duration-500">
+                        <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold tracking-widest ${
+                        m.role === 'user' ? 'bg-[#3c4043] text-[#e3e3e3] border border-white/10' : 'bg-[#1e1f20] border border-[#8ab4f8]/20'
+                        }`}>
+                        {m.role === 'user' ? "YOU" : <img src="/code-lens-logo.svg" className="w-5 h-5" alt="AI" />}
+                        </div>
+                        <div className="flex-1 min-w-0 pt-1">
+                            <div className="prose prose-invert prose-gemini max-w-none">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
+                                    {m.content}
+                                </ReactMarkdown>
+                                {isStreaming && i === messages.length - 1 && m.role === 'ai' && (
+                                  <span className="inline-block w-2 h-4 bg-[#8ab4f8] ml-1 animate-pulse" />
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                ))
             )}
           </div>
         </div>
 
-        {/* INPUT CAPSULE */}
         <div className="absolute bottom-0 left-0 w-full p-8 bg-gradient-to-t from-[#131314] via-[#131314] to-transparent">
           <div className="max-w-[850px] mx-auto">
             <div className={`flex items-center p-2 rounded-[32px] border transition-all duration-500 shadow-2xl ${
-              status === 'ready' 
-                ? 'bg-[#1e1f20] border-white/10 focus-within:border-[#8ab4f8]/40' 
-                : 'bg-[#1e1f20]/50 border-white/5 opacity-40 grayscale pointer-events-none'
+              status === 'ready' ? 'bg-[#1e1f20] border-white/10' : 'bg-[#1e1f20]/50 opacity-40 pointer-events-none'
             }`}>
               <Input
-                placeholder={status === 'ready' ? "Ask about code architecture..." : "Index a repo in the sidebar to begin"}
+                placeholder={status === 'ready' ? "Ask about code..." : "Index a repo to begin"}
                 disabled={status !== 'ready' || isStreaming}
                 className="border-none bg-transparent h-14 px-6 focus-visible:ring-0 text-lg placeholder:text-[#5f6368] font-light"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && submitQuery()}
               />
-              <Button 
-                onClick={() => submitQuery()}
-                disabled={status !== 'ready' || isStreaming || !query.trim()}
-                size="icon" 
-                className="rounded-full h-11 w-11 bg-transparent text-[#8ab4f8] hover:bg-white/5 transition-colors shrink-0"
-              >
+              <Button onClick={() => submitQuery()} size="icon" className="rounded-full h-11 w-11 bg-transparent text-[#8ab4f8] hover:bg-white/5">
                 {isStreaming ? <Loader2 className="animate-spin" /> : <Send size={22} />}
               </Button>
             </div>
