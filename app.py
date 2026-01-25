@@ -68,9 +68,18 @@ async def ingest_repository(request: IngestRequest):
                     logger.info(log_msg)
                 return f"data: {json.dumps({'status': status, 'message': message, 'summary': summary})}\n\n"
 
-            # 1. Persistence Check
-            if vector_store.check_if_indexed(request.repo_url):
-                yield sse_format("ready", "Cache hit: repository already indexed", {"cached": True})
+            # 1. Persistence Check - FIX: UNPACK THE TUPLE
+            is_indexed, metadata = vector_store.check_if_indexed(request.repo_url)
+            
+            if is_indexed:
+                # Retrieve the actual branch from metadata, default to main if not found
+                cached_branch = metadata.get("branch", "main") if metadata else "main"
+                
+                yield sse_format(
+                    "ready", 
+                    f"Cache hit: repository already indexed (branch: {cached_branch})", 
+                    {"cached": True, "branch": cached_branch}
+                )
                 return
 
             # 2. Ingestion/Cloning
@@ -78,7 +87,9 @@ async def ingest_repository(request: IngestRequest):
             ingestor = RepoIngestor(request.repo_url)
             raw_data = await asyncio.to_thread(ingestor.ingest)
             
+            # Capture the actual branch from the ingestor
             branch = raw_data.get("branch", "main")
+            
             if raw_data.get("errors") and not raw_data.get("extracted_code"):
                 yield sse_format("error", f"Cloning failed: {raw_data['errors']}")
                 return
@@ -91,10 +102,12 @@ async def ingest_repository(request: IngestRequest):
             chunk_count = len(processed_data.get("chunks", []))
             yield sse_format("vectorizing", f"Generating embeddings for {chunk_count} chunks")
             
+            # FIX: Pass the branch name here so it gets saved in the collection metadata
             await asyncio.to_thread(
                 vector_store.add_documents, 
                 request.repo_url, 
-                processed_data["chunks"]
+                processed_data["chunks"],
+                branch=branch 
             )
 
             # Final Success
@@ -104,7 +117,11 @@ async def ingest_repository(request: IngestRequest):
             yield sse_format(
                 status="ready", 
                 message=f"Indexing completed (branch: {branch})",
-                summary={**processed_data.get("summary", {}), "branch": branch, "execution_time": duration}
+                summary={
+                    **processed_data.get("summary", {}), 
+                    "branch": branch, 
+                    "execution_time": duration
+                }
             )
 
         except Exception as e:

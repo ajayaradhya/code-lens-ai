@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { 
   Zap, Github, Send, Loader2, Database, 
-  ExternalLink, History, CheckCircle2, AlertCircle 
+  ExternalLink, History, CheckCircle2, AlertCircle, Terminal
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -30,7 +30,7 @@ export default function App() {
   
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // 1. FIX: Load history and set the initial repo/branch correctly
+  // 1. Hydrate state from LocalStorage on mount
   useEffect(() => {
     const saved = localStorage.getItem("codelens_history");
     if (saved) {
@@ -38,9 +38,11 @@ export default function App() {
         const parsedHistory: RepoHistory[] = JSON.parse(saved);
         setHistory(parsedHistory);
         if (parsedHistory.length > 0) {
-          // Auto-select the last used repo and its correct branch
           setRepoUrl(parsedHistory[0].url);
           setActiveBranch(parsedHistory[0].branch);
+          // We assume it's ready if it's in history, 
+          // but handleIndex will re-verify if they click "Index" again.
+          setStatus('ready'); 
         }
       } catch (e) {
         console.error("Failed to parse history", e);
@@ -48,17 +50,17 @@ export default function App() {
     }
   }, []);
 
+  // 2. Persist history changes
   useEffect(() => {
-    if (history.length > 0) {
-      localStorage.setItem("codelens_history", JSON.stringify(history));
-    }
+    localStorage.setItem("codelens_history", JSON.stringify(history));
   }, [history]);
 
+  // 3. Auto-scroll to bottom
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, isStreaming]);
 
   const getGithubLink = (path: string) => {
     const cleanPath = path.replace(/['`]/g, "").trim();
@@ -73,55 +75,57 @@ export default function App() {
     setStatus('indexing');
     setMessages([]); 
 
-    toast.loading("Waking up the local instance...", { id: toastId });
+    toast.loading("Analyzing codebase architecture...", { id: toastId });
 
     try {
       await api.ingest(repoUrl, (update) => {
-        const isFinished = update.status === 'ready' || update.summary;
-        const isError = update.status === 'error';
-
-        if (isFinished) {
-          const detectedBranch = update.summary?.branch || "main";
+        // Check for success: either a 'ready' status or a summary object
+        if (update.status === 'ready' || update.summary) {
+          
+          // --- THE FIX ---
+          // 1. Check the summary root (where backend sends 'branch' for new indexes)
+          // 2. Check update.branch (if your SSE sender puts it at top level)
+          // 3. Check the cached metadata field we just added to the backend
+          const detectedBranch = update.summary?.branch || update.branch || "main";
+          
           setStatus('ready');
           setActiveBranch(detectedBranch);
 
           setHistory(prev => {
             const filtered = prev.filter(item => item.url !== repoUrl);
+            // Save the actual detected branch so future clicks work
             return [{ url: repoUrl, branch: detectedBranch }, ...filtered];
           });
           
-          toast.success("Codebase Indexed Successfully", { id: toastId });
-          
-          setTimeout(() => {
-            setMessages([{ 
-              role: 'ai', 
-              content: `Index complete for **${repoUrl.split('/').pop()}**. I've targeted the \`${detectedBranch}\` branch. Ready for deep diving.` 
-            }]);
-          }, 500);
+          toast.success(update.summary?.cached ? "Restored from Index" : "Ready for questions", { 
+            id: toastId, 
+            description: `Active branch: ${detectedBranch}` 
+          });
           return;
         }
 
-        if (isError) {
+        if (update.status === 'error') {
           setStatus('idle');
-          // 2. FIX: Improved case-insensitive check for quota errors
-          const errorMsg = update.message.toUpperCase();
+          const errorMsg = update.message?.toUpperCase() || "";
+          
           if (errorMsg.includes("429") || errorMsg.includes("QUOTA") || errorMsg.includes("EXHAUSTED")) {
             toast.error("Gemini is exhausted.", { id: toastId });
             setMessages([{
                 role: 'ai',
-                content: "### 🛑 Brain Freeze (Quota 429)\n\nI've been thinking too hard and Google's free tier has put me in timeout. \n\n**Give me about 20 seconds** to cool my circuits and then try indexing again. Even AI needs to blink occasionally."
+                content: "### 🛑 Brain Freeze (Quota 429)\n\nI've been thinking too hard... Google's free tier has put me in timeout. \n\n**Give me about 30 seconds** to cool my circuits. Even AI needs to blink occasionally."
             }]);
           } else {
-            toast.error(update.message, { id: toastId });
+            toast.error(update.message || "Indexing failed", { id: toastId });
           }
           return;
         }
 
+        // Live updates (Cloning, Processing, etc.)
         toast.loading(update.message, { id: toastId });
       });
     } catch (err: any) {
       setStatus('idle');
-      toast.error("Network hiccup.", { id: toastId });
+      toast.error("Network hiccup. Is the backend running?", { id: toastId });
     }
   };
 
@@ -142,7 +146,7 @@ export default function App() {
         });
       });
     } catch (err: any) {
-        toast.error("Thinking failed. Try a shorter question.");
+        toast.error("Response failed. Try again in a few seconds.");
     } finally {
       setIsStreaming(false);
     }
@@ -156,9 +160,15 @@ export default function App() {
 
       if (!inline && match) {
         return (
-          <div className="rounded-xl overflow-hidden my-6 border border-white/5 shadow-2xl">
+          <div className="rounded-xl overflow-hidden my-6 border border-white/5 shadow-2xl group">
             <div className="bg-[#2a2b2e] px-4 py-2 text-[10px] font-bold font-mono text-[#9aa0a6] border-b border-white/5 flex justify-between tracking-widest uppercase">
               <span>{match[1]}</span>
+              <button 
+                onClick={() => navigator.clipboard.writeText(content)}
+                className="opacity-0 group-hover:opacity-100 transition-opacity hover:text-white"
+              >
+                Copy
+              </button>
             </div>
             <SyntaxHighlighter
               style={vscDarkPlus}
@@ -191,6 +201,8 @@ export default function App() {
 
   return (
     <div className="flex w-screen h-screen bg-[#131314] text-[#e3e3e3] overflow-hidden font-sans">
+      
+      {/* SIDEBAR */}
       <aside className="w-[320px] bg-[#1e1f20] flex flex-col p-6 border-r border-white/5 shrink-0">
         <div className="flex items-center gap-3 mb-10 px-1">
           <div className="w-8 h-8 flex items-center justify-center">
@@ -219,14 +231,14 @@ export default function App() {
             disabled={status === 'indexing' || !repoUrl}
             className={`w-full h-11 rounded-xl font-bold transition-all duration-300 ${
               status === 'ready' 
-                ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
+                ? 'bg-green-500/10 text-green-400 border border-green-500/20 hover:bg-green-500/20' 
                 : 'bg-white text-black hover:bg-[#e3e3e3]'
             }`}
           >
             {status === 'indexing' ? (
-              <><Loader2 className="animate-spin mr-2" size={18} /> Indexing...</>
+              <><Loader2 className="animate-spin mr-2" size={18} /> Mapping...</>
             ) : status === 'ready' ? (
-              <><CheckCircle2 className="mr-2" size={18} /> Ready to Chat</>
+              <><CheckCircle2 className="mr-2" size={18} /> Indexed & Ready</>
             ) : (
               <><Database className="mr-2" size={18} /> Index Architecture</>
             )}
@@ -236,7 +248,7 @@ export default function App() {
         <div className="flex-1 overflow-y-auto custom-scrollbar">
           <div className="flex items-center gap-2 text-[#9aa0a6] mb-4">
             <History size={14} />
-            <span className="text-[10px] font-bold uppercase tracking-widest">Recent Sessions</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest">Sessions</span>
           </div>
           {history.map((item, i) => (
             <div 
@@ -244,32 +256,46 @@ export default function App() {
               onClick={() => { 
                 setRepoUrl(item.url); 
                 setActiveBranch(item.branch);
-                setStatus('idle'); 
+                setStatus('ready');
+                setMessages([]);
               }}
               className={`p-3 mb-2 rounded-xl border cursor-pointer transition-all text-xs truncate ${
                 repoUrl === item.url ? 'bg-[#8ab4f8]/10 border-[#8ab4f8]/20 text-[#8ab4f8]' : 'bg-white/5 border-transparent hover:border-white/10 text-[#c4c7c5]'
               }`}
             >
               <div className="flex items-center justify-between">
-                <span className="truncate flex-1">
+                <span className="truncate flex-1 font-medium">
                   <Github size={12} className="inline mr-2 opacity-50" />
                   {item.url.split('/').pop()}
                 </span>
-                <span className="text-[9px] opacity-40 ml-2 font-mono">{item.branch}</span>
+                <span className="text-[9px] opacity-40 ml-2 font-mono uppercase bg-white/5 px-1 rounded">{item.branch}</span>
               </div>
             </div>
           ))}
         </div>
       </aside>
 
+      {/* CHAT AREA */}
       <main className="flex-1 flex flex-col min-w-0 bg-[#131314] relative">
         <div ref={scrollRef} className="flex-1 overflow-y-auto custom-scrollbar pb-44">
           <div className="max-w-[850px] mx-auto px-8 py-20">
+            
             {messages.length === 0 ? (
-                <div className="h-[70vh] flex flex-col items-center justify-center">
-                    <h2 className="text-4xl font-light text-white mb-8 tracking-tight italic">How can I help you today?</h2>
+                <div className="h-[70vh] flex flex-col items-center justify-center animate-in fade-in duration-1000">
+                    <div className="w-16 h-16 bg-[#1e1f20] rounded-2xl flex items-center justify-center mb-8 border border-white/5 shadow-xl">
+                       <Terminal className="text-[#8ab4f8]" size={32} />
+                    </div>
+                    <h2 className="text-4xl font-light text-white mb-2 tracking-tight italic text-center">
+                        {status === 'ready' ? "Context Loaded." : "Hello, Developer."}
+                    </h2>
+                    <p className="text-[#9aa0a6] mb-12 text-sm">
+                        {status === 'ready' 
+                           ? `Currently exploring ${repoUrl.split('/').pop()} on branch ${activeBranch}` 
+                           : "Index a repository to start a technical deep-dive."}
+                    </p>
+                    
                     {status === 'ready' && (
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 w-full max-w-2xl">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 w-full max-w-2xl animate-in slide-in-from-bottom-4 duration-500">
                         {[
                             { label: "Overview", icon: <Database size={16} />, prompt: "Give me a high-level overview of this project's architecture." },
                             { label: "Entry Point", icon: <Zap size={16} />, prompt: "Where is the main entry point and how does the app initialize?" },
@@ -311,10 +337,11 @@ export default function App() {
           </div>
         </div>
 
+        {/* INPUT BAR */}
         <div className="absolute bottom-0 left-0 w-full p-8 bg-gradient-to-t from-[#131314] via-[#131314] to-transparent">
           <div className="max-w-[850px] mx-auto">
             <div className={`flex items-center p-2 rounded-[32px] border transition-all duration-500 shadow-2xl ${
-              status === 'ready' ? 'bg-[#1e1f20] border-white/10' : 'bg-[#1e1f20]/50 opacity-40 pointer-events-none'
+              status === 'ready' ? 'bg-[#1e1f20] border-white/10 focus-within:border-[#8ab4f8]/50' : 'bg-[#1e1f20]/50 opacity-40 pointer-events-none'
             }`}>
               <Input
                 placeholder={status === 'ready' ? "Ask about code..." : "Index a repo to begin"}
@@ -324,10 +351,13 @@ export default function App() {
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && submitQuery()}
               />
-              <Button onClick={() => submitQuery()} size="icon" className="rounded-full h-11 w-11 bg-transparent text-[#8ab4f8] hover:bg-white/5">
+              <Button onClick={() => submitQuery()} size="icon" className="rounded-full h-11 w-11 bg-transparent text-[#8ab4f8] hover:bg-white/5 transition-colors">
                 {isStreaming ? <Loader2 className="animate-spin" /> : <Send size={22} />}
               </Button>
             </div>
+            <p className="text-center text-[10px] text-[#5f6368] mt-4 tracking-wider uppercase">
+               Powered by Gemini 2.5 Flash • Context-Aware Code Analysis
+            </p>
           </div>
         </div>
       </main>
