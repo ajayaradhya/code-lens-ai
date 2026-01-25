@@ -24,9 +24,10 @@ class CodeProcessor:
         for item in extracted_data:
             try:
                 content = item["content"]
-                meta = item["metadata"] # Contains path, branch, commit
+                meta = item["metadata"] 
                 file_ext = "." + meta["path"].split('.')[-1]
                 
+                # Choose the appropriate splitter
                 if file_ext in self.extension_map:
                     splitter = RecursiveCharacterTextSplitter.from_language(
                         language=self.extension_map[file_ext],
@@ -41,18 +42,32 @@ class CodeProcessor:
 
                 chunks = splitter.split_text(content)
                 
+                # --- Line Number Calculation ---
                 for i, chunk in enumerate(chunks):
+                    # Find the first occurrence of this chunk in the original content 
+                    # to determine the starting line number.
+                    start_index = content.find(chunk)
+                    
+                    # If for some reason find() fails, default to 1
+                    # count('\n') from start of file to the chunk index gives line offset
+                    start_line = content[:start_index].count('\n') + 1 if start_index != -1 else 1
+                    
+                    # Estimate end line based on chunk content
+                    end_line = start_line + chunk.count('\n')
+
                     results["chunks"].append({
                         "page_content": chunk,
                         "metadata": {
                             "source": meta["path"],
                             "branch": meta["branch"],
                             "commit": meta["commit"],
+                            "start_line": start_line,
+                            "end_line": end_line,
                             "chunk_id": i
                         }
                     })
             except Exception as e:
-                results["errors"].append(f"Failed to split {meta['path']}: {str(e)}")
+                results["errors"].append(f"Failed to split {meta.get('path', 'unknown')}: {str(e)}")
         
         results["summary"]["total_chunks"] = len(results["chunks"])
         return results

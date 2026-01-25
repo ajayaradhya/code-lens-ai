@@ -9,8 +9,8 @@ class RepoIngestor:
     def __init__(self, repo_url):
         self.repo_url = repo_url
         self.temp_dir = os.path.abspath(os.path.join(tempfile.gettempdir(), "codelens_repo"))
-        self.supported_extensions = {'.py', '.js', '.ts', '.java', '.cpp', '.h', '.go', '.md', '.txt', '.html', '.css'}
-        self.ignored_dirs = {'.git', 'node_modules', 'venv', '__pycache__', 'dist', 'build', '.vscode', '.idea'}
+        self.supported_extensions = {'.py', '.js', '.ts', '.tsx', '.jsx', '.java', '.cpp', '.h', '.go', '.md', '.txt', '.html', '.css', '.rs'}
+        self.ignored_dirs = {'.git', 'node_modules', 'venv', '__pycache__', 'dist', 'build', '.vscode', '.idea', 'target'}
 
     def _on_rm_error(self, func, path, exc_info):
         try:
@@ -46,10 +46,7 @@ class RepoIngestor:
 
         try:
             self._cleanup()
-            # Step 1: Clone
             repo = Repo.clone_from(self.repo_url, self.temp_dir, depth=1)
-            
-            # Step 2: Capture Git Metadata
             results["branch"] = repo.active_branch.name
             results["commit_hash"] = repo.head.object.hexsha
             
@@ -57,7 +54,6 @@ class RepoIngestor:
             results["errors"].append(f"Failed to clone repository: {str(e)}")
             return results
 
-        # Step 3: Walk and Filter
         for root, dirs, files in os.walk(self.temp_dir):
             dirs[:] = [d for d in dirs if d not in self.ignored_dirs and not d.startswith('.')]
             
@@ -76,14 +72,17 @@ class RepoIngestor:
                             continue
 
                         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                            content = f.read()
+                            lines = f.readlines()
+                            content = "".join(lines)
+                            
                             if content.strip():
                                 results["extracted_code"].append({
                                     "content": content,
                                     "metadata": {
                                         "path": rel_path,
                                         "branch": results["branch"],
-                                        "commit": results["commit_hash"]
+                                        "commit": results["commit_hash"],
+                                        "total_lines": len(lines) 
                                     }
                                 })
                                 results["summary"]["files_indexed"] += 1

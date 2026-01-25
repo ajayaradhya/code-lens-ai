@@ -49,33 +49,24 @@ class VectorStoreManager:
 
         collection_name = self._get_repo_hash(repo_url)
         
-        # --- THE FIX FOR FORCE RE-INDEX ---
-        # We delete the existing collection if it exists to ensure a clean slate.
-        # This prevents stale chunks from deleted files from persisting.
         try:
             self.chroma_client.delete_collection(name=collection_name)
-            logger.info(f"Wiped existing collection for {repo_url} (Fresh Index)")
+            logger.info(f"Wiped existing collection for {repo_url}")
         except Exception:
-            # Collection didn't exist yet, which is fine
             pass
 
-        # Create a fresh collection with the new branch metadata
         collection = self.chroma_client.create_collection(
             name=collection_name,
             metadata={"branch": branch, "repo_url": repo_url} 
         )
 
         documents = [c["page_content"] for c in chunks]
-        metadatas = [c["metadata"] for c in chunks]
-        
-        # Optimization: Use a more collision-resistant ID format
-        # Using source and index ensures we don't have duplicate IDs in the same push
+        metadatas = [c["metadata"] for c in chunks] # Now contains start_line/end_line
         ids = [f"{collection_name}_{i}" for i in range(len(documents))]
 
+        # Embedding logic
         batch_size = 100
         all_embeddings = []
-
-        # Embedding loop (This part of your code is perfect)
         for i in range(0, len(documents), batch_size):
             batch_docs = documents[i : i + batch_size]
             embed_response = self.client.models.embed_content(
@@ -85,7 +76,6 @@ class VectorStoreManager:
             )
             all_embeddings.extend([e.values for e in embed_response.embeddings])
 
-        # Final add to Chroma
         collection.add(
             ids=ids,
             embeddings=all_embeddings,
@@ -110,6 +100,11 @@ class VectorStoreManager:
         )
         
         return [
-            {"content": doc, "source": meta.get("source", "unknown")}
+            {
+                "content": doc, 
+                "source": meta.get("source", "unknown"),
+                "start_line": meta.get("start_line", 1),
+                "end_line": meta.get("end_line", 1)
+            }
             for doc, meta in zip(results['documents'][0], results['metadatas'][0])
         ]

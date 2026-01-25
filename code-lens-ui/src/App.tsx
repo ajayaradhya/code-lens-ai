@@ -55,10 +55,15 @@ export default function App() {
   }, [messages, isStreaming]);
 
   // --- Helpers ---
-  const getGithubLink = (path: string) => {
-    const cleanPath = path.replace(/['`]/g, "").trim();
-    const base = repoUrl.replace(/\/$/, '');
-    return `${base}/blob/${activeBranch}/${cleanPath}`;
+  const getGithubLink = (path: string, line?: number) => {
+    if (!repoUrl) return "#";
+
+    // Standardize slashes for GitHub (must be forward)
+    const cleanPath = path.replace(/\\/g, '/').replace(/^\/+/, '');
+    const base = repoUrl.trim().replace(/\.git$/, "").replace(/\/$/, "");
+    const lineAnchor = line ? `#L${line}` : "";
+    
+    return `${base}/blob/${activeBranch}/${cleanPath}${lineAnchor}`;
   };
 
   // --- Handlers ---
@@ -123,19 +128,43 @@ export default function App() {
     if (!targetQuery.trim() || status !== 'ready' || isStreaming) return;
 
     setQuery("");
-    setMessages(prev => [...prev, { role: 'user', content: targetQuery }, { role: 'ai', content: "" }]);
+    // 1. We don't add the AI message immediately to the state 
+    // until we confirm it's not a quota error
+    const tempUserMsg = { role: 'user' as const, content: targetQuery };
+    setMessages(prev => [...prev, tempUserMsg]);
     setIsStreaming(true);
 
     try {
+      let isFirstChunk = true;
+
       await api.query(repoUrl, targetQuery, (chunk) => {
+        // 2. Catch the specific error code from the backend
+        if (isFirstChunk && chunk.startsWith("ERR_BRAIN_QUOTA")) {
+          toast.error("Gemini API Quota Exceeded", {
+            description: "Free tier limit reached. Please wait 30s before trying again.",
+            duration: 5000,
+          });
+          // Remove the empty AI message if we haven't added it yet
+          return;
+        }
+
+        if (isFirstChunk) {
+          // It's a valid response, add the placeholder AI message now
+          setMessages(prev => [...prev, { role: 'ai', content: "" }]);
+          isFirstChunk = false;
+        }
+
         setMessages(prev => {
-          const last = prev[prev.length - 1];
-          const rest = prev.slice(0, -1);
-          return [...rest, { ...last, content: last.content + chunk }];
+          const newMessages = [...prev];
+          const last = newMessages[newMessages.length - 1];
+          if (last.role === 'ai') {
+            last.content += chunk;
+          }
+          return newMessages;
         });
       });
     } catch (err) {
-        toast.error("Response failed. Try again in a few seconds.");
+        toast.error("Connection lost. Is the backend awake?");
     } finally {
       setIsStreaming(false);
     }
