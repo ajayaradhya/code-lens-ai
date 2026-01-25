@@ -5,66 +5,78 @@ Codes that are functionally similar will lie in close proximity of each other in
 """
 
 import chromadb
-from chromadb.utils import embedding_functions
-import os
+from google import genai
+from google.genai import types
 
 class VectorStoreManager:
-    def __init__(self, api_key):
-        # 1. Initialize Google's Embedding Function
-        self.embedding_fn = embedding_functions.GoogleGenerativeAiEmbeddingFunction(
-            api_key=api_key,
-            model_name="models/text-embedding-004"
-        )
+    def __init__(self, api_key: str):
+        # 1. Initialize the modern Gemini Client
+        self.client = genai.Client(api_key=api_key)
+        self.embedding_model = "text-embedding-004"
         
-        # 2. Initialize Ephemeral (In-Memory) Chroma Client
-        self.client = chromadb.Client()
-        self.collection_name = "code_snippets"
+        # 2. Initialize ChromaDB
+        self.chroma_client = chromadb.Client()
+        self.collection_name = "code_lens_indices"
         
-        # Ensure we start fresh
+        # 3. Defensive Re-initialization
+        # We delete existing collections to ensure a 'Clean Room' environment for each session
         try:
-            self.client.delete_collection(self.collection_name)
-        except:
-            pass
+            self.chroma_client.delete_collection(self.collection_name)
+        except Exception:
+            pass # Collection didn't exist, which is fine
             
-        self.collection = self.client.create_collection(
-            name=self.collection_name,
-            embedding_function=self.embedding_fn
-        )
+        self.collection = self.chroma_client.create_collection(name=self.collection_name)
 
-    def add_documents(self, chunks):
+    def add_documents(self, chunks: list):
         """
-        Takes the output of CodeProcessor and adds it to ChromaDB.
+        Converts chunks to vectors and stores them in ChromaDB.
         """
-        # Prepare data for ChromaDB format
-        ids = [f"id_{i}" for i in range(len(chunks))]
+        if not chunks:
+            return "No chunks to index."
+
         documents = [c["page_content"] for c in chunks]
         metadatas = [c["metadata"] for c in chunks]
+        ids = [f"id_{i}_{m['source']}" for i, m in enumerate(metadatas)]
 
-        # Batching for stability
-        batch_size = 100
-        for i in range(0, len(documents), batch_size):
-            self.collection.add(
-                ids=ids[i:i+batch_size],
-                documents=documents[i:i+batch_size],
-                metadatas=metadatas[i:i+batch_size]
-            )
+        # 4. Manual Embedding Generation
+        # We generate embeddings ourselves so we aren't reliant on DB-specific plugins
+        embed_response = self.client.models.embed_content(
+            model=self.embedding_model,
+            contents=documents,
+            config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
+        )
+        
+        # Extract vectors from response
+        embeddings = [e.values for e in embed_response.embeddings]
+
+        # 5. Add to collection
+        self.collection.add(
+            ids=ids,
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=metadatas
+        )
         
         return f"Successfully indexed {len(documents)} chunks."
 
-    def search(self, query, n_results=5):
+    def search(self, query: str, n_results: int = 5):
         """
-        Finds the most relevant code snippets for a given question.
+        Performs semantic search by embedding the user's query first.
         """
+        # Embed the query with the proper task type
+        query_embedding = self.client.models.embed_content(
+            model=self.embedding_model,
+            contents=query,
+            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
+        ).embeddings[0].values
+
         results = self.collection.query(
-            query_texts=[query],
+            query_embeddings=[query_embedding],
             n_results=n_results
         )
         
-        # Reformat results for easier use by the LLM
-        formatted_context = []
-        for i in range(len(results['documents'][0])):
-            formatted_context.append({
-                "content": results['documents'][0][i],
-                "source": results['metadatas'][0][i]['source']
-            })
-        return formatted_context
+        # Clean re-formatting for the Brain
+        return [
+            {"content": doc, "source": meta["source"]}
+            for doc, meta in zip(results['documents'][0], results['metadatas'][0])
+        ]

@@ -17,7 +17,6 @@ import google.genai as genai
 
 class CodeLensBrain:
     def __init__(self, api_key):
-        genai.configure(api_key=api_key)
         # We use Flash for speed and cost-efficiency
         self.client = genai.Client(api_key=api_key, http_options={'api_version': 'v1alpha'})
         self.model_name = "gemini-1.5-flash"
