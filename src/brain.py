@@ -16,18 +16,30 @@ class CodeLensBrain:
 
     async def generate_answer_stream(self, question, context_snippets):
         """
-        Streams an answer where citations are embedded as HTML tags directly.
-        This allows the frontend to render badges in real-time without a JSON map.
+        Streams text with inline <cite> tags, followed by a final 
+        METADATA_BATCH for the retrieval sidebar.
         """
         # 1. Prepare Context with Pre-baked Tags
         context_parts = []
+        # We'll send this to the frontend at the end for the sidebar
+        retrieval_metadata = {
+            "query": question,
+            "model": self.model_name,
+            "snippets": []
+        }
         
         for s in context_snippets:
-            # We create the exact tag we want the LLM to use
-            # We use forward slashes for cross-platform compatibility
             source_file = s['source'].replace("\\", "/")
             cite_tag = f'<cite file="{source_file}" line="{s["start_line"]}" />'
             
+            # Populate metadata for the sidebar
+            retrieval_metadata["snippets"].append({
+                "file": source_file,
+                "lines": f"{s['start_line']}-{s['end_line']}",
+                "content": s['content'],
+                "score": s.get('score', 0) # Assumes your retriever provides a similarity score
+            })
+
             snippet_block = (
                 f"--- SOURCE_TAG: {cite_tag} ---\n"
                 f"FILE: {source_file}\n"
@@ -37,51 +49,38 @@ class CodeLensBrain:
         
         context_text = "\n\n".join(context_parts)
 
-        # 2. System Instruction for Inline Tagging
         system_instruction = """
         SYSTEM: You are 'CodeLensAI', a senior software architect.
         Answer the user's question using the provided codebase snippets.
 
         CITATION RULE:
-        You must cite your sources using the EXACT <cite /> tag provided in the SOURCE_TAG header for that snippet.
+        You must cite your sources using the EXACT <cite /> tag provided in the SOURCE_TAG header.
         
-        Example Output: 
-        "The server is initialized in <cite file="src/api.py" line="10" /> and handles routes in <cite file="src/routes.py" line="45" />."
-
         CONSTRAINTS:
-        1. NEVER use [[N]] or [file:line] formats. ONLY use the <cite /> tags.
-        2. Start your answer IMMEDIATELY. No introductory filler.
-        3. If multiple snippets support a fact, place their tags side-by-side.
-        4. Preserve the 'file' and 'line' attributes exactly as shown in the context.
+        1. Start your answer IMMEDIATELY.
+        2. Use ONLY the provided <cite /> tags for citations.
         """
 
-        user_prompt = f"""
-        {system_instruction}
+        user_prompt = f"{system_instruction}\n\nCONTEXT:\n{context_text}\n\nUSER QUESTION: {question}"
 
-        CONTEXT:
-        {context_text}
-
-        USER QUESTION: 
-        {question}
-        """
-
-        # 3. Stream the Response
         try:
-            # Note: We NO LONGER yield a "CITATIONS_MAP" header. 
-            # The citations are now part of the natural text flow.
-
             response_stream = self.client.models.generate_content_stream(
                 model=self.model_name,
                 contents=user_prompt,
                 config=genai.types.GenerateContentConfig(
-                    temperature=0.0, # Keep it deterministic
+                    temperature=0.0,
                     max_output_tokens=1536
                 )
             )
 
+            # Step A: Stream the text chunks
             for chunk in response_stream:
                 if chunk.text:
                     yield chunk.text
+
+            # Step B: Final Metadata Chunk
+            # We prefix this with a specific marker so the frontend knows it's not display text
+            yield f"\n\nMETADATA_BATCH: {json.dumps(retrieval_metadata)}"
 
         except Exception as e:
             error_str = str(e)

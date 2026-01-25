@@ -102,23 +102,32 @@ async def ingest_repository(request: IngestRequest):
 @app.post("/query")
 async def query_codebase(request: QueryRequest):
     try:
-        # Search now returns list of dicts with: content, source, start_line, end_line
+        # 1. Retrieval Phase
+        # Ensure search() returns 'source', 'start_line', 'end_line', and 'content'
         context = vector_store.search(request.repo_url, request.question)
         
         if not context:
-            return StreamingResponse(iter(["data: No relevant context found.\n\n"]), media_type="text/event-stream")
+            # We return a plain string so the UI can render it as a standard message
+            return StreamingResponse(
+                iter(["I couldn't find any relevant code snippets to answer that question."]), 
+                media_type="text/plain"
+            )
 
+        # 2. Streaming Wrapper
         async def stream_wrapper():
-            # The context now contains line numbers which the Brain will use for [file:line] citations
             try:
+                # generate_answer_stream now handles the <cite> tags 
+                # and yields METADATA_BATCH: {json} at the very end.
                 async for chunk in brain.generate_answer_stream(request.question, context):
                     yield chunk
             except Exception as e:
-                yield f"\n\n[Generation Error: {str(e)}]"
+                logger.error(f"Streaming error: {e}")
+                yield f"\n\n[Error during generation: {str(e)}]"
 
-        return StreamingResponse(stream_wrapper(), media_type="text/event-stream")
+        return StreamingResponse(stream_wrapper(), media_type="text/plain")
 
     except Exception as e:
+        logger.error(f"Query endpoint failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     
 
