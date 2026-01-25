@@ -1,3 +1,4 @@
+import json
 import logging
 import google.genai as genai
 
@@ -15,33 +16,43 @@ class CodeLensBrain:
 
     async def generate_answer_stream(self, question, context_snippets):
         """
-        Synthesizes an answer based on retrieved code snippets with line-level citations.
+        Streams an answer where citations are embedded as HTML tags directly.
+        This allows the frontend to render badges in real-time without a JSON map.
         """
-        # 1. Prepare the context block with Line Numbers
+        # 1. Prepare Context with Pre-baked Tags
         context_parts = []
+        
         for s in context_snippets:
-            # We explicitly format the metadata so the LLM sees exactly where the code sits
-            snippet_header = f"--- FILE: {s['source']} (Lines {s['start_line']}-{s['end_line']}) ---"
-            context_parts.append(f"{snippet_header}\n{s['content']}")
+            # We create the exact tag we want the LLM to use
+            # We use forward slashes for cross-platform compatibility
+            source_file = s['source'].replace("\\", "/")
+            cite_tag = f'<cite file="{source_file}" line="{s["start_line"]}" />'
+            
+            snippet_block = (
+                f"--- SOURCE_TAG: {cite_tag} ---\n"
+                f"FILE: {source_file}\n"
+                f"CONTENT:\n{s['content']}"
+            )
+            context_parts.append(snippet_block)
         
         context_text = "\n\n".join(context_parts)
 
-        # 2. Updated System Prompt for Citations
-        # We use a strict format [filename:line] for the frontend to regex-match
+        # 2. System Instruction for Inline Tagging
         system_instruction = """
         SYSTEM: You are 'CodeLensAI', a senior software architect.
-        Your goal is to provide technical answers based on the provided codebase snippets.
+        Answer the user's question using the provided codebase snippets.
 
-        CITATION RULES:
-        1. You MUST cite your sources using the format: [filename:line].
-        2. Example: "The database connection is initialized in `[db.py:24]`."
-        3. If a snippet covers multiple lines, cite the starting line.
-        4. Citations should be clickable-style links in the text.
+        CITATION RULE:
+        You must cite your sources using the EXACT <cite /> tag provided in the SOURCE_TAG header for that snippet.
+        
+        Example Output: 
+        "The server is initialized in <cite file="src/api.py" line="10" /> and handles routes in <cite file="src/routes.py" line="45" />."
 
         CONSTRAINTS:
-        - Use ONLY the provided context.
-        - Use markdown for code blocks.
-        - If the answer isn't in the context, state that you cannot find it in the current index.
+        1. NEVER use [[N]] or [file:line] formats. ONLY use the <cite /> tags.
+        2. Start your answer IMMEDIATELY. No introductory filler.
+        3. If multiple snippets support a fact, place their tags side-by-side.
+        4. Preserve the 'file' and 'line' attributes exactly as shown in the context.
         """
 
         user_prompt = f"""
@@ -54,22 +65,28 @@ class CodeLensBrain:
         {question}
         """
 
-        # 3. Stream the response
+        # 3. Stream the Response
         try:
+            # Note: We NO LONGER yield a "CITATIONS_MAP" header. 
+            # The citations are now part of the natural text flow.
+
             response_stream = self.client.models.generate_content_stream(
                 model=self.model_name,
                 contents=user_prompt,
-                config=genai.types.GenerateContentConfig(temperature=0.1)
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.0, # Keep it deterministic
+                    max_output_tokens=1536
+                )
             )
 
             for chunk in response_stream:
                 if chunk.text:
                     yield chunk.text
+
         except Exception as e:
             error_str = str(e)
-            logger.error(error_str)
+            logger.error(f"Generation error: {error_str}")
             if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                # We yield a clean code that the frontend can catch
                 yield "ERR_BRAIN_QUOTA: The AI is currently overwhelmed. Please wait about 30 seconds."
             else:
                 yield f"ERR_BRAIN_GENERIC: {error_str}"

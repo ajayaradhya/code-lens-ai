@@ -125,46 +125,61 @@ export default function App() {
 
   const submitQuery = async (overrideQuery?: string) => {
     const targetQuery = overrideQuery || query;
+    
+    // Guard: Don't submit if empty, indexing, or already streaming
     if (!targetQuery.trim() || status !== 'ready' || isStreaming) return;
 
+    // Reset input and prepare UI
     setQuery("");
-    // 1. We don't add the AI message immediately to the state 
-    // until we confirm it's not a quota error
     const tempUserMsg = { role: 'user' as const, content: targetQuery };
     setMessages(prev => [...prev, tempUserMsg]);
     setIsStreaming(true);
 
     try {
       let isFirstChunk = true;
+      let hasAddedPlaceholder = false;
 
       await api.query(repoUrl, targetQuery, (chunk) => {
-        // 2. Catch the specific error code from the backend
+        // 1. Handle Quota Errors from Backend
         if (isFirstChunk && chunk.startsWith("ERR_BRAIN_QUOTA")) {
           toast.error("Gemini API Quota Exceeded", {
             description: "Free tier limit reached. Please wait 30s before trying again.",
             duration: 5000,
           });
-          // Remove the empty AI message if we haven't added it yet
           return;
         }
 
-        if (isFirstChunk) {
-          // It's a valid response, add the placeholder AI message now
+        // 2. Initialize the AI message placeholder
+        // We only do this once the first valid chunk arrives
+        if (!hasAddedPlaceholder) {
           setMessages(prev => [...prev, { role: 'ai', content: "" }]);
-          isFirstChunk = false;
+          hasAddedPlaceholder = false; 
+          // Note: we use a local variable because state updates are async
+          hasAddedPlaceholder = true; 
         }
 
+        // 3. Update the message content
         setMessages(prev => {
           const newMessages = [...prev];
-          const last = newMessages[newMessages.length - 1];
-          if (last.role === 'ai') {
-            last.content += chunk;
+          const lastIndex = newMessages.length - 1;
+          const lastMessage = newMessages[lastIndex];
+
+          if (lastMessage && lastMessage.role === 'ai') {
+            // Defensive check: Ensure we don't double-append if React re-renders quickly
+            // This is a safety measure against the "TheThe" duplication
+            newMessages[lastIndex] = {
+              ...lastMessage,
+              content: lastMessage.content + chunk
+            };
           }
           return newMessages;
         });
+
+        isFirstChunk = false;
       });
     } catch (err) {
-        toast.error("Connection lost. Is the backend awake?");
+      console.error("Query Error:", err);
+      toast.error("Connection lost. Is the backend awake?");
     } finally {
       setIsStreaming(false);
     }

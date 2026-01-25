@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import stat
 import time
@@ -30,6 +31,24 @@ class RepoIngestor:
                 except Exception:
                     self.temp_dir = tempfile.mkdtemp(prefix="codelens_")
 
+    def _strip_mermaid(self, content):
+        """
+        Improved regex to catch mermaid blocks with attributes 
+        like ```mermaid: { ... } or ```mermaid [id].
+        """
+        # Regex breakdown:
+        # ```(?i)mermaid  -> Match backticks + case-insensitive 'mermaid'
+        # [^ \n]* -> Match any character that isn't a space or newline (attributes/colons)
+        # .*?             -> Non-greedy match of the actual diagram content
+        # ```             -> Closing backticks
+        pattern = r"```(?i)mermaid[^ \n]*.*?```"
+        
+        def replace_with_newlines(match):
+            count = match.group(0).count('\n')
+            return '\n' * count
+
+        return re.sub(pattern, replace_with_newlines, content, flags=re.DOTALL)
+    
     def ingest(self):
         results = {
             "extracted_code": [],
@@ -74,6 +93,10 @@ class RepoIngestor:
                         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                             lines = f.readlines()
                             content = "".join(lines)
+
+                            # Strip mermaid content
+                            if file_ext == '.md':
+                                content = self._strip_mermaid(content)
                             
                             if content.strip():
                                 results["extracted_code"].append({
