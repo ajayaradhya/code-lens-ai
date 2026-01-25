@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from src.ingestor import RepoIngestor
 from src.processor import CodeProcessor
@@ -12,6 +13,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = FastAPI(title="CodeLensAI API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # TODO: Replace with proper URL in prod
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Initialize our components
 api_key = os.getenv("GEMINI_API_KEY")
