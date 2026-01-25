@@ -13,15 +13,16 @@ Output of the app is steam instead of waiting 10s for response.
 This is to fetch result to user faster and make it feel like 'typewriter' response of LLMs.
 
 """
-import google.generativeai as genai
+import google.genai as genai
 
 class CodeLensBrain:
     def __init__(self, api_key):
         genai.configure(api_key=api_key)
         # We use Flash for speed and cost-efficiency
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        self.client = genai.Client(api_key=api_key, http_options={'api_version': 'v1alpha'})
+        self.model_name = "gemini-1.5-flash"
 
-    def generate_answer(self, question, context_snippets)   :
+    def generate_answer_stream(self, question, context_snippets)   :
         """
         Synthesizes an answer based on retrieved code snippets.
         """
@@ -33,15 +34,16 @@ class CodeLensBrain:
 
         # 2. Define the System Persona and Rules
         # Prompt Anchoring: Suffixing prompt with 'FINAL ANSWER:' will force LLM to answer without it being chatty.
-        prompt = f"""
-        You are 'CodeLensAI', a senior software architect. Your goal is to explain code logic clearly.
-        
-        RULES:
-        1. Use ONLY the provided code snippets below to answer.
-        2. If the answer is not in the code, state: "I cannot find the answer in the provided repository context."
-        3. ALWAYS cite the file name when explaining logic.
-        4. Use Markdown for code blocks and bolding for emphasis.
+        # 2. Build the System Instruction
+        system_instruction = (
+            "You are 'CodeLensAI', a senior software architect. "
+            "Use ONLY the provided code snippets to answer. "
+            "If the answer is not in the code, state: 'I cannot find the answer in the provided repository context.' "
+            "ALWAYS cite the file name. Use Markdown for formatting."
+        )
 
+        # 3. Construct the prompt
+        user_prompt = f"""
         CONTEXT FROM REPOSITORY:
         {context_text}
 
@@ -51,6 +53,17 @@ class CodeLensBrain:
         FINAL ANSWER:
         """
 
-        # 3. Generate with streaming for better UX
-        response = self.model.generate_content(prompt, stream=True)
-        return response
+        # 4. Generate answer using the context
+        response_stream = self.client.models.generate_content_stream(
+            model=self.model_name,
+            contents=user_prompt,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.1,
+            )
+        )
+
+        for chunk in response_stream:
+            # The new SDK provides text chunks directly
+            if chunk.text:
+                yield chunk.text
