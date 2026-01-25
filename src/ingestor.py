@@ -81,6 +81,8 @@ class RepoIngestor:
                     
                     # Important Detail: Guardrail for large files
                     # For readability, 500000 can be represented as 500_000 in Python
+                    # Most source code files (.py, .js, .h) are well under 100KB. 
+                    # A file larger than 500KB is usually data, a dependency, or generated code
                     if os.path.getsize(file_path) > 500_000: # 500KB limit
                         results["warnings"].append(f"Skipped {rel_path}: File too large.")
                         continue
