@@ -1,10 +1,43 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="en" style="background-color: #131314;">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/png" href="/code-lens-logo.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>code-lens-ui</title>
+    
+    <title>CodeLens AI</title>
+
+    <style>
+      /* Prevent the white flash on load */
+      body {
+        margin: 0;
+        background-color: #131314;
+        color: #e3e3e3;
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      }
+
+      /* Webkit Scrollbar Styling (Gemini Style) */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #3c4043;
+        border-radius: 10px;
+        border: 2px solid #131314;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #5f6368;
+      }
+      
+      /* Smooth transitions for state changes */
+      * {
+        transition: background-color 0.2s ease, border-color 0.2s ease;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
