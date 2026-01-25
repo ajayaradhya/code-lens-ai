@@ -55,3 +55,27 @@
 #root {
   background-color: #131314 !important;
 }
+
+/* index.css */
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.streaming-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background-color: #8ab4f8;
+  border-radius: 50%;
+  margin-left: 4px;
+  vertical-align: middle;
+  animation: blink 1s step-start infinite;
+  box-shadow: 0 0 8px rgba(138,180,248,0.8);
+}
+
+/* Ensure typography doesn't add extra margins to the last p tag */
+.prose p:last-child {
+  display: inline;
+}
