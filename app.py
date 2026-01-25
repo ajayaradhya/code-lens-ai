@@ -60,6 +60,10 @@ async def query_codebase(request: QueryRequest):
     """
     # 1. Search for relevant snippets
     context = vector_store.search(request.question)
+
+    print(f"DEBUG: Found {len(context)} snippets for query.")
+    for i, res in enumerate(context):
+        print(f"Snippet {i} Source: {res['source']}")
     
     if not context:
         return {"answer": "I couldn't find any relevant code to answer that."}

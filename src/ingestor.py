@@ -24,51 +24,85 @@ Output:
         "repo_size_kb": 450
     }
 }
-
 """
+
 import os
 import shutil
+import stat
+import time
 import tempfile
 from git import Repo
 
 class RepoIngestor:
     def __init__(self, repo_url):
         self.repo_url = repo_url
-        # Using a temporary directory that the OS will help manage
-        self.temp_dir = os.path.join(tempfile.gettempdir(), "codelens_repo")
+        # Using a consistent temp path; absolute pathing helps avoid WinError 5
+        self.temp_dir = os.path.abspath(os.path.join(tempfile.gettempdir(), "codelens_repo"))
         
         # Lead Engineer Move: Explicit Whitelist and Blacklist
-        self.supported_extensions = {'.py', '.js', '.ts', '.java', '.cpp', '.h', '.go', '.md', '.txt'}
-        self.ignored_dirs = {'.git', 'node_modules', 'venv', '__pycache__', 'dist', 'build'}
+        # We focus on text-based source files to prevent token waste
+        self.supported_extensions = {'.py', '.js', '.ts', '.java', '.cpp', '.h', '.go', '.md', '.txt', '.html', '.css'}
+        self.ignored_dirs = {'.git', 'node_modules', 'venv', '__pycache__', 'dist', 'build', '.vscode', '.idea'}
+
+    def _on_rm_error(self, func, path, exc_info):
+        """
+        Handler for shutil.rmtree to flip read-only bits.
+        Essential for deleting .git/objects on Windows.
+        """
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except Exception:
+            pass # If it still fails, the _cleanup method will handle the rename fallback
 
     def _cleanup(self):
-        """Ensure a clean slate before cloning."""
+        """
+        Robust cleanup logic. If standard deletion fails due to process locks, 
+        it renames the directory to clear the path for a new clone.
+        """
         if os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir)
+            try:
+                shutil.rmtree(self.temp_dir, onerror=self._on_rm_error)
+            except Exception:
+                # The 'Rename Fallback': If Windows locked the folder, move it aside
+                try:
+                    old_path = f"{self.temp_dir}_{int(time.time())}"
+                    os.rename(self.temp_dir, old_path)
+                except Exception:
+                    # If even renaming fails, we generate a unique temp_dir for this run
+                    self.temp_dir = tempfile.mkdtemp(prefix="codelens_")
 
     def ingest(self):
         """
-        The main entry point. Clones, filters, and packages the codebase.
-        Returns: Dict containing 'extracted_code', 'warnings', 'errors', and 'summary'.
+        Clones, filters, and packages the codebase.
+        Returns a structured dict for the Processor.
         """
         results = {
             "extracted_code": [],
             "warnings": [],
             "errors": [],
-            "summary": {"total_files_found": 0, "files_indexed": 0}
+            "summary": {
+                "total_files_found": 0, 
+                "files_indexed": 0,
+                "repo_path": self.temp_dir
+            }
         }
 
         try:
+            # Step 1: Force a clean directory
             self._cleanup()
-            # Important Detail: depth=1 for speed and efficiency
+
+            # Step 2: Shallow Clone (depth=1) for maximum efficiency
+            # We don't need the commit history, just the current 'state' of the code
             Repo.clone_from(self.repo_url, self.temp_dir, depth=1)
+            
         except Exception as e:
             results["errors"].append(f"Failed to clone repository: {str(e)}")
             return results
 
+        # Step 3: Walk the repository
         for root, dirs, files in os.walk(self.temp_dir):
-            # Important Detail: Efficient directory skipping
-            # Using dirs[:] to point to the same memory location used by os.walk
+            # Lead Move: Modify dirs in-place to skip ignored directories efficiently
             dirs[:] = [d for d in dirs if d not in self.ignored_dirs and not d.startswith('.')]
             
             for file in files:
@@ -79,24 +113,23 @@ class RepoIngestor:
                     file_path = os.path.join(root, file)
                     rel_path = os.path.relpath(file_path, self.temp_dir)
                     
-                    # Important Detail: Guardrail for large files
-                    # For readability, 500000 can be represented as 500_000 in Python
-                    # Most source code files (.py, .js, .h) are well under 100KB. 
-                    # A file larger than 500KB is usually data, a dependency, or generated code
-                    if os.path.getsize(file_path) > 500_000: # 500KB limit
-                        results["warnings"].append(f"Skipped {rel_path}: File too large.")
-                        continue
-
+                    # Guardrail: Avoid massive files (minified JS, datasets, etc.)
                     try:
-                        with open(file_path, 'r', encoding='utf-8') as f:
+                        file_size = os.path.getsize(file_path)
+                        if file_size > 500_000: # 500KB Limit
+                            results["warnings"].append(f"Skipped {rel_path}: File too large ({file_size // 1024}KB).")
+                            continue
+
+                        # Step 4: Read and Extract
+                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                             content = f.read()
-                            results["extracted_code"].append({
-                                "content": content,
-                                "metadata": {"path": rel_path}
-                            })
-                            results["summary"]["files_indexed"] += 1
-                    except UnicodeDecodeError:
-                        results["errors"].append(f"Could not read {rel_path}: Non-text encoding.")
+                            if content.strip(): # Ignore empty files
+                                results["extracted_code"].append({
+                                    "content": content,
+                                    "metadata": {"path": rel_path}
+                                })
+                                results["summary"]["files_indexed"] += 1
+                                
                     except Exception as e:
                         results["errors"].append(f"Error reading {rel_path}: {str(e)}")
 

@@ -18,10 +18,10 @@ import google.genai as genai
 class CodeLensBrain:
     def __init__(self, api_key):
         # We use Flash for speed and cost-efficiency
-        self.client = genai.Client(api_key=api_key, http_options={'api_version': 'v1alpha'})
-        self.model_name = "gemini-1.5-flash"
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = "models/gemini-flash-latest"
 
-    def generate_answer_stream(self, question, context_snippets)   :
+    def generate_answer_stream(self, question, context_snippets):
         """
         Synthesizes an answer based on retrieved code snippets.
         """
@@ -31,38 +31,32 @@ class CodeLensBrain:
             for s in context_snippets
         ])
 
-        # 2. Define the System Persona and Rules
-        # Prompt Anchoring: Suffixing prompt with 'FINAL ANSWER:' will force LLM to answer without it being chatty.
-        # 2. Build the System Instruction
-        system_instruction = (
-            "You are 'CodeLensAI', a senior software architect. "
-            "Use ONLY the provided code snippets to answer. "
-            "If the answer is not in the code, state: 'I cannot find the answer in the provided repository context.' "
-            "ALWAYS cite the file name. Use Markdown for formatting."
-        )
-
-        # 3. Construct the prompt
+        # 2. Build a high-compatibility prompt
+        # We keep instructions inside the prompt to avoid version-specific config errors
         user_prompt = f"""
-        CONTEXT FROM REPOSITORY:
+        SYSTEM: You are 'CodeLensAI', a senior software architect. 
+        Use ONLY the provided code snippets to answer. ALWAYS cite the file name.
+        If the answer isn't in the context, say you don't know.
+
+        CONTEXT:
         {context_text}
 
-        USER QUESTION:
+        USER QUESTION: 
         {question}
-        
-        FINAL ANSWER:
         """
 
-        # 4. Generate answer using the context
-        response_stream = self.client.models.generate_content_stream(
-            model=self.model_name,
-            contents=user_prompt,
-            config=genai.types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.1,
+        # 3. Stream the response
+        try:
+            response_stream = self.client.models.generate_content_stream(
+                model=self.model_name,
+                contents=user_prompt,
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.1,
+                )
             )
-        )
 
-        for chunk in response_stream:
-            # The new SDK provides text chunks directly
-            if chunk.text:
-                yield chunk.text
+            for chunk in response_stream:
+                if chunk.text:
+                    yield chunk.text
+        except Exception as e:
+            yield f"Critical Brain Error: {str(e)}"

@@ -15,7 +15,7 @@ class VectorStoreManager:
         self.embedding_model = "text-embedding-004"
         
         # 2. Initialize ChromaDB
-        self.chroma_client = chromadb.Client()
+        self.chroma_client = chromadb.PersistentClient(path="./chroma_db")
         self.collection_name = "code_lens_indices"
         
         # 3. Defensive Re-initialization
@@ -29,7 +29,7 @@ class VectorStoreManager:
 
     def add_documents(self, chunks: list):
         """
-        Converts chunks to vectors and stores them in ChromaDB.
+        Converts chunks to vectors in batches of 100 to stay within API limits.
         """
         if not chunks:
             return "No chunks to index."
@@ -38,26 +38,32 @@ class VectorStoreManager:
         metadatas = [c["metadata"] for c in chunks]
         ids = [f"id_{i}_{m['source']}" for i, m in enumerate(metadatas)]
 
-        # 4. Manual Embedding Generation
-        # We generate embeddings ourselves so we aren't reliant on DB-specific plugins
-        embed_response = self.client.models.embed_content(
-            model=self.embedding_model,
-            contents=documents,
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
-        )
-        
-        # Extract vectors from response
-        embeddings = [e.values for e in embed_response.embeddings]
+        # Lead Move: Professional Batching Logic
+        batch_size = 100
+        all_embeddings = []
 
-        # 5. Add to collection
+        for i in range(0, len(documents), batch_size):
+            batch_docs = documents[i : i + batch_size]
+            
+            # Generate embeddings for this specific batch
+            embed_response = self.client.models.embed_content(
+                model=self.embedding_model,
+                contents=batch_docs,
+                config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
+            )
+            
+            # Append the new vectors to our master list
+            all_embeddings.extend([e.values for e in embed_response.embeddings])
+
+        # Add the full set to ChromaDB
         self.collection.add(
             ids=ids,
-            embeddings=embeddings,
+            embeddings=all_embeddings,
             documents=documents,
             metadatas=metadatas
         )
         
-        return f"Successfully indexed {len(documents)} chunks."
+        return f"Successfully indexed {len(documents)} chunks in {len(range(0, len(documents), batch_size))} batches."
 
     def search(self, query: str, n_results: int = 5):
         """
