@@ -1,3 +1,5 @@
+import asyncio
+import json
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,27 +41,47 @@ class QueryRequest(BaseModel):
 
 @app.post("/ingest")
 async def ingest_repository(request: IngestRequest):
-    """
-    Step 1 & 2: Clone and Process the Repository
-    """
-    ingestor = RepoIngestor(request.repo_url)
-    
-    # Ingesting
-    raw_data = ingestor.ingest()
-    if raw_data["errors"] and not raw_data["extracted_code"]:
-        raise HTTPException(status_code=400, detail=raw_data["errors"])
-    
-    # Processing (Chunking)
-    processed_data = processor.process(raw_data["extracted_code"])
-    
-    # Vectorizing
-    status = vector_store.add_documents(processed_data["chunks"])
-    
-    return {
-        "status": status,
-        "summary": processed_data["summary"],
-        "warnings": raw_data["warnings"] + processed_data["warnings"]
-    }
+    async def event_generator():
+        try:
+            # Helper to wrap the data in SSE format
+            def sse_format(status: str, message: str, summary: dict = None):
+                payload = {"status": status, "message": message}
+                if summary:
+                    payload["summary"] = summary
+                return f"data: {json.dumps(payload)}\n\n"
+
+            # Stage 1: Cloning
+            yield sse_format("cloning", "Cloning repository...")
+            ingestor = RepoIngestor(request.repo_url)
+            raw_data = await asyncio.to_thread(ingestor.ingest)
+            
+            if raw_data.get("errors") and not raw_data.get("extracted_code"):
+                yield sse_format("error", f"Ingestion Error: {raw_data['errors']}")
+                return
+
+            # Stage 2: Processing/Chunking
+            yield sse_format("processing", "Parsing and chunking code...")
+            processed_data = await asyncio.to_thread(processor.process, raw_data["extracted_code"])
+
+            # Stage 3: Vectorizing
+            chunk_count = len(processed_data.get("chunks", []))
+            yield sse_format("vectorizing", f"Indexing {chunk_count} code chunks...")
+            
+            # Offload heavy vector store IO to a thread
+            status = await asyncio.to_thread(vector_store.add_documents, processed_data["chunks"])
+
+            # Stage 4: Final Summary
+            yield sse_format(
+                status=status, 
+                message="Successfully indexed architecture.",
+                summary=processed_data.get("summary")
+            )
+
+        except Exception as e:
+            yield sse_format("error", f"System Failure: {str(e)}")
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
 
 @app.post("/query")
 async def query_codebase(request: QueryRequest):
