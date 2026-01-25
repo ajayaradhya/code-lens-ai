@@ -70,7 +70,12 @@ export default function App() {
 
   const getGithubLink = (path: string) => {
     const cleanPath = path.replace(/['`]/g, "").trim();
-    return `${repoUrl.replace(/\/$/, '')}/blob/main/${cleanPath}`;
+    
+    // Remove trailing slashes from base URL
+    const base = repoUrl.replace(/\/$/, '');
+    const branch = "master"; 
+
+    return `${base}/blob/${branch}/${cleanPath}`;
   };
 
   return (
