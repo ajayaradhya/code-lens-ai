@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+import { api } from "@/lib/api.ts";
 
 // Components
 import { Sidebar } from "./components/Sidebar";
