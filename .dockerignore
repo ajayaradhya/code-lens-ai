@@ -2,15 +2,20 @@
 .git
 .gitignore
 
-# Frontend
-frontend/node_modules
-frontend/dist
+# Dependencies
+node_modules/
+**/node_modules/
 
-# Backend
-backend/__pycache__
+# Build outputs
+dist/
+**/dist/
+build/
+
+# Python
+backend/__pycache__/
 .env
-venv
-.pytest_cache
+venv/
+.pytest_cache/
 
 # OS
 .DS_Store
