@@ -10,6 +10,7 @@ RUN npm install
 COPY frontend/ ./
 # Note: Ensure your tsconfig.json has "noUnusedLocals": false 
 # or use "npm run build" if you've updated the script to skip type-check
+RUN ls -la src/ && ls -la src/lib/
 RUN npm run build
 
 # --- STAGE 2: Build the Backend & Final Image ---
