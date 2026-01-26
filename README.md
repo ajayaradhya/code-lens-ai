@@ -114,6 +114,13 @@ Configured for Render and similar PaaS platforms using a multi-stage Docker buil
 
 ---
 
+## Future Roadmap
+- **Multi-Repo Context:** Cross-repository indexing for microservices analysis.
+- **Local LLM Support:** Integration with Ollama for local-first, air-gapped environments.
+- **Deeper AST Analysis:** Moving beyond chunking to true Abstract Syntax Tree parsing for better relationship mapping.
+
+---
+
 ## License
 
 Apache License 2.0
