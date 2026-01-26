@@ -1,6 +1,10 @@
 import json
 import logging
+import os
+from dotenv import load_dotenv
 import google.genai as genai
+
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -12,7 +16,7 @@ logger = logging.getLogger("CodeLensAI")
 class CodeLensBrain:
     def __init__(self, api_key):
         self.client = genai.Client(api_key=api_key)
-        self.model_name = "models/gemini-2.5-flash-lite" # Upgraded to 2.0 for better instruction following
+        self.model_name = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
 
     async def generate_answer_stream(self, question, context_snippets):
         """

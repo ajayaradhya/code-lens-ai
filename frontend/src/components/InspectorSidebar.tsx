@@ -1,4 +1,4 @@
-import { X, FileText, Hash, ExternalLink } from "lucide-react";
+import { X, FileText, Hash } from "lucide-react";
 import { CodeBlock } from "./CodeBlock"; // Reuse your existing CodeBlock
 
 export function InspectorSidebar({ data, onClose }: { data: any; onClose: () => void }) {
