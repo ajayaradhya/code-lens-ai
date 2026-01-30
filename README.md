@@ -35,6 +35,60 @@ Implements **Server-Sent Events (SSE)** to provide users with live indexing logs
 | Orchestration | LangChain | Standardizes RAG lifecycle (loading, chunking, prompting) |
 
 ---
+## Preview
+
+### **Home Page**
+Sidebar for GitHub Repo + Query Window
+
+![Home Screen](frontend/public/home-page.png)
+
+### **Adding GitHub Public Repository Link**
+Paste Repository link -> Press "Index Repository"
+
+![Input Repository](frontend/public/adding-repo-link.png)
+
+### **Streaming Response**
+Entire process of ingestion happen asynchronously. respective messages are shown on UI for user.
+
+Cloning Repository to local disk:
+
+![Cloning Repository](frontend/public/cloning.png)
+
+Parsing & chunking code:
+
+![Processing Code](frontend/public/analysing.png)
+
+Embedding Code Chunks:
+![Embedding Chunks](frontend/public/embedding.png)
+
+## Indexing Complete + Ready for Query
+Either select from predefined query sets or write your own
+![Query Ready](frontend/public/ready-to-query.png)
+
+## Type Query
+Type any query regarding the codebase.
+
+![Query Ready](frontend/public/query-type.png)
+
+## Run Query through LLM
+Query is parsed, most relevant chunks from DB is extracted and context passed to LLM.
+![Query Ready](frontend/public/query-running.png)
+
+## Streaming Answer
+LLM's response is streamed to UI instead of waiting 5+ seconds for entire answer to be available.
+![Query Ready](frontend/public/streaming-query-response.png)
+
+## Citations
+Response includes citations to fact-check LLM's answer.
+
+![Query Ready](frontend/public/query-citations.png)
+
+## Developer Tools
+Chrome's network tab shows streamed response of the answer.
+
+![Query Ready](frontend/public/network-tab.png)
+
+---
 
 ## Workflow Architecture
 
