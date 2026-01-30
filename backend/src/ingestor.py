@@ -11,7 +11,24 @@ class RepoIngestor:
         self.repo_url = repo_url
         self.temp_dir = os.path.abspath(os.path.join(tempfile.gettempdir(), "codelens_repo"))
         self.supported_extensions = {'.py', '.js', '.ts', '.tsx', '.jsx', '.java', '.cpp', '.h', '.go', '.md', '.txt', '.html', '.css', '.rs'}
-        self.ignored_dirs = {'.git', 'node_modules', 'venv', '__pycache__', 'dist', 'build', '.vscode', '.idea', 'target'}
+        self.ignored_dirs = {'.git', 'node_modules', 'venv', '__pycache__', 'dist', 'build', '.vscode', '.idea', 'target', 'tests'}
+        self.forbidden_files = {'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock'}
+        self.ignored_extensions = {
+            # 1. Media & Assets (Non-text)
+            '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.pdf', '.zip', '.gz', '.tar',
+            
+            # 2. Executables & Binaries
+            '.exe', '.dll', '.so', '.pyc', '.pyd', '.obj', '.o', '.bin',
+            
+            # 3. UI/Style Noise (Optional - depending on if you want UI logic)
+            '.css', '.scss', '.sass', '.less',
+            
+            # 4. Data & Logs (High noise, low logic)
+            '.csv', '.log', '.sql', '.sqlite', '.db',
+            
+            # 5. Lockfiles (Massive and redundant)
+            '.lock', '.lockb'
+        }
 
     def _on_rm_error(self, func, path, exc_info):
         try:
@@ -81,6 +98,9 @@ class RepoIngestor:
             dirs[:] = [d for d in dirs if d not in self.ignored_dirs and not d.startswith('.')]
             
             for file in files:
+                if file.lower() in self.forbidden_files or any(file.endswith(ext) for ext in self.ignored_extensions):
+                    continue
+
                 results["summary"]["total_files_found"] += 1
                 file_ext = os.path.splitext(file)[1].lower()
                 
