@@ -5,9 +5,20 @@ from .base import BaseParser
 
 class TreeSitterParser(BaseParser):
     def __init__(self, language='javascript'):
-        # Initialize the specific language
-        lang_module = ts_ts.language() if language == 'typescript' else ts_js.language()
-        self.parser = Parser(lang_module)
+        # Map the language string to the specific grammar function
+        grammar_map = {
+            'typescript': ts_ts.language_typescript,
+            'tsx': ts_ts.language_tsx,
+            'javascript': ts_js.language,
+            'jsx': ts_js.language
+        }
+        
+        # Get the function from the map, default to javascript if not found
+        lang_func = grammar_map.get(language, ts_js.language)
+        
+        # Initialize the parser with the resulting language object
+        lang_obj = Language(lang_func())
+        self.parser = Parser(lang_obj)
         
     def parse(self, content: str, metadata: dict):
         chunks = []
@@ -17,20 +28,35 @@ class TreeSitterParser(BaseParser):
             lines = content.splitlines()
             total_lines = len(lines)
 
-            # 1. Define nodes we want to extract
-            # JS/TS have many function types: function_declaration, method_definition, arrow_function
+            # 1. Expanded target types for TS/TSX support
             target_types = {
                 'function_declaration', 'method_definition', 
-                'class_declaration', 'variable_declarator'
+                'class_declaration', 'variable_declarator',
+                'interface_declaration', 'type_alias_declaration',
+                'enum_declaration'
             }
 
             structural_nodes = []
             for node in root_node.children:
-                if node.type in target_types:
-                    # Tree-sitter uses 0-indexed start_point (row, col)
+                # Handle Export Statements (Lexical wrapping)
+                # We want the start/end lines of the WHOLE export, 
+                # but the node_type of the logic inside.
+                display_type = node.type
+                search_node = node
+
+                if node.type in {'export_statement', 'lexical_declaration'}:
+                    # Find the interesting child inside the export
+                    for child in node.children:
+                        if child.type in target_types:
+                            display_type = child.type
+                            break
+                
+                if node.type in target_types or display_type in target_types:
+                    # Use node (the parent) for lines to include the 'export' keyword
+                    # Use display_type for the metadata label
                     start = node.start_point[0] + 1
                     end = node.end_point[0] + 1
-                    structural_nodes.append((start, end, node.type))
+                    structural_nodes.append((start, end, display_type))
 
             # 2. Extract nodes and "gaps" (Module Level Code)
             structural_nodes.sort(key=lambda x: x[0])

@@ -66,6 +66,7 @@ class CodeLensBrain:
         """
 
         user_prompt = f"{system_instruction}\n\nCONTEXT:\n{context_text}\n\nUSER QUESTION: {question}"
+        logger.info(user_prompt)
 
         try:
             response_stream = self.client.models.generate_content_stream(
