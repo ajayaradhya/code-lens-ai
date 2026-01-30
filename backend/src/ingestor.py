@@ -65,6 +65,7 @@ class RepoIngestor:
 
         try:
             self._cleanup()
+            # Using shallow clone depth=1 as we need only latest master branch code and not any history of the repository
             repo = Repo.clone_from(self.repo_url, self.temp_dir, depth=1)
             results["branch"] = repo.active_branch.name
             results["commit_hash"] = repo.head.object.hexsha
@@ -74,6 +75,9 @@ class RepoIngestor:
             return results
 
         for root, dirs, files in os.walk(self.temp_dir):
+            # dirs[:] is used here instead of dirs[] to make sure that the dir is replaced in memory
+            # dirs[] would create a local variable and os.walk generator would never pick the filtered list
+            # Since os.walk is generator, on next iteration os.walk will pick the files from filetered directories
             dirs[:] = [d for d in dirs if d not in self.ignored_dirs and not d.startswith('.')]
             
             for file in files:
@@ -86,18 +90,22 @@ class RepoIngestor:
                     
                     try:
                         file_size = os.path.getsize(file_path)
+                        # 500_000 here denotes 500000 bytes (500 KB) 500_000 is just a more readable representation of 500000
+                        # this is undertaken to ignore larger codes such as generated content
                         if file_size > 500_000: 
                             results["warnings"].append(f"Skipped {rel_path}: File too large.")
                             continue
 
                         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                             lines = f.readlines()
-                            content = "".join(lines)
+                            content = "".join(lines) # creates a single line string of the entire file
 
                             # Strip mermaid content
                             if file_ext == '.md':
                                 content = self._strip_mermaid(content)
                             
+                            # Just extract full file content as single line string
+                            # We will do parsing later in processor
                             if content.strip():
                                 results["extracted_code"].append({
                                     "content": content,
