@@ -1,6 +1,11 @@
 from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
 
 class CodeProcessor:
+    """
+    Responsible for parsing and chunking code based on file extension.
+    chunk_size determines the preferred size of chunk provided to LangChain's Recursive Splitter
+    chunk_overlap is to keep track of the relation between chunks
+    """
     def __init__(self, chunk_size=1000, chunk_overlap=100):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
@@ -29,6 +34,7 @@ class CodeProcessor:
                 
                 # Choose the appropriate splitter
                 if file_ext in self.extension_map:
+                    # using langchain_text_splitters to parse code blocks based on extension
                     splitter = RecursiveCharacterTextSplitter.from_language(
                         language=self.extension_map[file_ext],
                         chunk_size=self.chunk_size,
@@ -42,7 +48,11 @@ class CodeProcessor:
 
                 chunks = splitter.split_text(content)
                 
-                # --- Line Number Calculation ---
+                # An 'imperfect' custom logic to determine line numbers
+                # 1) Try finding chunk content within the original file content.
+                # 2) If exists, count number of '\n's from the begining till the chunk location. this is start_line
+                # 3) end_line is the number of '\n's within the chunk content
+                # TODO: It might not work if there are repeated code blocks. Use AST later for better results.
                 for i, chunk in enumerate(chunks):
                     # Find the first occurrence of this chunk in the original content 
                     # to determine the starting line number.
